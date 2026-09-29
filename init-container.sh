@@ -9,9 +9,9 @@ esac
 
 microdnf -y install jq tar xz git buildah findutils unzip python3.11 python3.11-pip make gettext
 
-curl -LSs -o /usr/local/bin/ocm "https://github.com/openshift-online/ocm-cli/releases/download/$(curl -Lfs https://api.github.com/repos/openshift-online/ocm-cli/releases/latest \
-    | jq -r .tag_name)/ocm-linux-${ARCH}" \
-    && chmod 0755 /usr/local/bin/ocm
+curl -fsSL -o /usr/local/bin/ocm \
+    "https://github.com/openshift-online/ocm-cli/releases/latest/download/ocm-linux-${ARCH}" && chmod 0755 /usr/local/bin/ocm
+
 curl -Lfs "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3" | bash  # installs to /usr/local/bin/helm
 
 curl -LSs -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -Lfs https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
@@ -21,18 +21,15 @@ curl -Lfs "https://mirror.openshift.com/pub/openshift-v4/${AWS_ARCH}/clients/ocp
     tar -xz -f - -C /usr/local/bin 'oc' \
     && chmod 0755 /usr/local/bin/oc
 
-curl -Lfs -o rosa.zip "https://github.com/openshift/rosa/releases/download/$(curl -Lfs https://api.github.com/repos/openshift/rosa/releases/latest \
-    | jq -r .tag_name)/rosa_linux_${ARCH}.zip" \
+curl -fsSL -o rosa.zip "https://github.com/openshift/rosa/releases/latest/download/rosa_linux_${ARCH}.zip" \
     && unzip -o rosa.zip -d /usr/local/bin \
     && chmod 0755 /usr/local/bin/rosa \
     && rm rosa.zip
 
-curl -LSs -o /usr/local/bin/opm "https://github.com/operator-framework/operator-registry/releases/download/$(curl -Lfs https://api.github.com/repos/operator-framework/operator-registry/releases/latest \
-    | jq -r .tag_name)/linux-${ARCH}-opm" \
+curl -fsSL -o /usr/local/bin/opm "https://github.com/operator-framework/operator-registry/releases/latest/download/linux-${ARCH}-opm" \
     && chmod 0755 /usr/local/bin/opm
 
-curl -LSs -o /usr/local/bin/cli53 "https://github.com/barnybug/cli53/releases/download/$(curl -Lfs https://api.github.com/repos/barnybug/cli53/releases/latest \
-    | jq -r .tag_name)/cli53-linux-${ARCH}" \
+curl -fsSL -o /usr/local/bin/cli53 "https://github.com/barnybug/cli53/releases/latest/download/cli53-linux-${ARCH}" \
     && chmod 0755 /usr/local/bin/cli53
 
 GO_VERSION=$(curl -Lfs 'https://go.dev/VERSION?m=text' | head -n1) \
