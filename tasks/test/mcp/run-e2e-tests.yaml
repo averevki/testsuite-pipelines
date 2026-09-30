@@ -471,11 +471,11 @@ spec:
 
         if [ "$(params.run-tests)" = "true" ]; then
           GINKGO_RC=0
-          ./bin/ginkgo -v --tags=e2e --timeout="$E2E_TIMEOUT" --procs="$E2E_PROCS" --junit-report="junit-e2e-report.xml" --output-dir="$(workspaces.shared-workspace.path)" ./tests/e2e || GINKGO_RC=$?
+          ./bin/ginkgo -v --tags=e2e --timeout="$E2E_TIMEOUT" --procs="$E2E_PROCS" --skip=NemoGuardrails --junit-report="junit-e2e-report.xml" --output-dir="$(workspaces.shared-workspace.path)" ./tests/e2e || GINKGO_RC=$?
           REPORT="$(workspaces.shared-workspace.path)/junit-e2e-report.xml"
           # Clean up Ginkgo JUnit XML for ReportPortal:
           #  - Remove BeforeSuite/AfterSuite entries (not real tests, one per parallel proc)
-          #  - Remove AuthPolicy tests (reported separately by run-auth-e2e-tests)
+          #  - Remove AuthPolicy and NemoGuardrails tests (reported by their dedicated tasks)
           #    Preserve skipped results for all other e2e tests.
           #  - Remove <properties> block (Ginkgo metadata that causes RP to silently fail suite creation)
           #  - Rename testsuite/classname so tests appear grouped under 'e2e' in RP
@@ -490,7 +490,7 @@ spec:
         for suite in root.findall("testsuite"):
             for testcase in suite.findall("testcase"):
                 name = testcase.get("name", "")
-                if "AuthPolicy" in name or name in ("[SynchronizedBeforeSuite]", "[SynchronizedAfterSuite]"):
+                if "AuthPolicy" in name or "NemoGuardrails" in name or name in ("[SynchronizedBeforeSuite]", "[SynchronizedAfterSuite]"):
                     suite.remove(testcase)
                 else:
                     testcase.set("classname", "tests.e2e")
