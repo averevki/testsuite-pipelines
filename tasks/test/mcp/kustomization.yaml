@@ -7,3 +7,4 @@ resources:
   - run-conformance-tests.yaml
   - run-e2e-tests.yaml
   - run-auth-e2e-tests.yaml
+  - run-guardrails-e2e-tests.yaml

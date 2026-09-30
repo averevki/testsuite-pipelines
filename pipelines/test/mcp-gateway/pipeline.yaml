@@ -87,6 +87,10 @@ spec:
     name: kuadrant-additional-helm-flags
     type: string
     default: ""
+  - description: Image for the standalone Kuadrant extension (e.g. quay.io/kuadrant/internal-extensions:latest). Extensions are only supported on Kuadrant v1.6+ / RHCL v1.5+ (leave empty to skip deploying extensions)
+    name: extensions-image
+    type: string
+    default: "quay.io/kuadrant/internal-extensions:latest"
 # Report Portal
   - description: Prefix of the launch name saved in Report Portal (nightly, pipeline, etc.)
     name: launch-name
@@ -123,6 +127,10 @@ spec:
     default: main
   - description: Run MCP e2e tests (true/false)
     name: run-e2e-tests
+    type: string
+    default: "true"
+  - description: Run MCP NeMo guardrails e2e tests (true/false)
+    name: run-guardrails-e2e-tests
     type: string
     default: "true"
   - description: Run MCP auth e2e tests (true/false)
@@ -222,6 +230,8 @@ spec:
         value: $(params.kuadrant-additional-helm-flags)
       - name: additional-manifests-secret
         value: $(params.additional-manifests-secret)
+      - name: extensions-image
+        value: $(params.extensions-image)
     workspaces:
     - name: shared-workspace
       workspace: shared-workspace
@@ -260,6 +270,8 @@ spec:
         value: $(params.kuadrant-additional-helm-flags)
       - name: additional-manifests-secret
         value: $(params.additional-manifests-secret)
+      - name: extensions-image
+        value: $(params.extensions-image)
     workspaces:
     - name: shared-workspace
       workspace: shared-workspace
@@ -345,9 +357,9 @@ spec:
     runAfter:
     - install-mcp-gateway
     when:
-      - input: "$(params.run-e2e-tests)-$(params.run-auth-e2e-tests)-$(params.run-conformance-tests)"
+      - input: "$(params.run-e2e-tests)-$(params.run-guardrails-e2e-tests)-$(params.run-auth-e2e-tests)-$(params.run-conformance-tests)"
         operator: notin
-        values: ["false-false-false"]
+        values: ["false-false-false-false"]
     taskRef:
       kind: Task
       name: cleanup-before-tests
@@ -380,10 +392,31 @@ spec:
     workspaces:
     - name: shared-workspace
       workspace: shared-workspace
-  - name: run-auth-e2e-tests
+  - name: run-guardrails-e2e-tests
     onError: continue
     runAfter:
     - run-e2e-tests
+    when:
+      - input: $(params.run-guardrails-e2e-tests)
+        operator: in
+        values: ["true"]
+    taskRef:
+      kind: Task
+      name: run-guardrails-e2e-tests
+    params:
+      - name: kubeconfig-path
+        value: $(tasks.kubectl-login.results.kubeconfig-path)
+      - name: mcp-gateway-namespace
+        value: $(params.mcp-gateway-namespace)
+      - name: istio-provider
+        value: $(params.istio-provider)
+    workspaces:
+    - name: shared-workspace
+      workspace: shared-workspace
+  - name: run-auth-e2e-tests
+    onError: continue
+    runAfter:
+    - run-guardrails-e2e-tests
     - clone-kuadrant-operator-repo
     taskRef:
       kind: Task

@@ -1,0 +1,144 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: run-guardrails-e2e-tests
+spec:
+  description: Deploy NeMo Guardrails and its judge simulator, then run the guardrails E2E specs against an installed MCP Gateway.
+  params:
+    - description: Path to workspace kubeconfig
+      name: kubeconfig-path
+      type: string
+    - description: Namespace MCP Gateway was deployed to
+      name: mcp-gateway-namespace
+      type: string
+    - description: Gateway API provider (ocp/ossm3)
+      name: istio-provider
+      type: string
+  steps:
+    - name: run-guardrails-e2e-tests
+      image: quay.io/kuadrant/testsuite-pipelines-tools:latest
+      imagePullPolicy: Always
+      env:
+      - name: KUBECONFIG
+        value: $(params.kubeconfig-path)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Populate env vars required for guardrails e2e tests
+        export E2E_DOMAIN="apps.$(oc get dns cluster -o jsonpath='{.spec.baseDomain}')"
+        export E2E_SCHEME=https
+        export E2E_PLATFORM=openshift
+        export E2E_HTTPS_REAL_CERTS=true
+        export E2E_TIMEOUT=30m
+        export E2E_PROCS=1
+
+        export GATEWAY_CA_BUNDLE_CONFIGMAP=trusted-ca-bundle
+        export MCP_GATEWAY_NAMESPACE="$(params.mcp-gateway-namespace)"
+
+        if [ "$(params.istio-provider)" = "ocp" ]; then
+          export GATEWAY_CLASS_NAME=openshift-default
+        else
+          export GATEWAY_CLASS_NAME=istio
+        fi
+
+        # Get the default ingress certificate name for the shared BeforeSuite
+        CERT_NAME=$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}')
+        if [ -z "$CERT_NAME" ]; then
+          echo "Error: Could not find default ingress certificate name"
+          exit 1
+        fi
+        export GATEWAY_TLS_SECRET=${CERT_NAME}
+
+        cd "$(workspaces.shared-workspace.path)/mcp-gateway"
+
+        # run-e2e-tests prepares certificates, test servers and Ginkgo even when run-tests=false.
+        kubectl wait --for=jsonpath='{.data.ca-bundle\.crt}' configmap/trusted-ca-bundle \
+          -n "$MCP_GATEWAY_NAMESPACE" --timeout=120s
+
+        # Add nemo-guardrails listener
+        if ! kubectl get gateway mcp-gateway -n gateway-system -o jsonpath='{.spec.listeners[*].name}' | grep -qw "nemo-guardrails"; then
+          kubectl patch gateway mcp-gateway -n gateway-system --type=json -p "[{
+            \"op\": \"add\",
+            \"path\": \"/spec/listeners/-\",
+            \"value\": {
+              \"name\": \"nemo-guardrails\",
+              \"hostname\": \"*.nemo-guardrails.$E2E_DOMAIN\",
+              \"port\": 8080,
+              \"protocol\": \"HTTP\",
+              \"allowedRoutes\": {\"namespaces\": {\"from\": \"All\"}}
+            }
+          }]"
+        else
+          echo "Listener nemo-guardrails already exists, skipping"
+        fi
+
+        # Create OpenShift Route for nemo-guardrails listener
+        kubectl apply -f - <<EOF
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          name: nemo-guardrails
+          namespace: gateway-system
+        spec:
+          host: mcp.nemo-guardrails.${E2E_DOMAIN}
+          to:
+            kind: Service
+            name: mcp-gateway-${GATEWAY_CLASS_NAME}
+          port:
+            targetPort: 8080
+          tls:
+            termination: edge
+            insecureEdgeTerminationPolicy: Redirect
+        EOF
+
+        # Wait for the shared backend, then deploy NeMo Guardrails and its judge simulator
+        oc wait --for=condition=available --timeout=180s deployment/mcp-test-stateless-server -n mcp-test
+        make deploy-nemo-guardrails-test-servers
+
+        GINKGO_RC=0
+        ./bin/ginkgo -v --tags=e2e --timeout="$E2E_TIMEOUT" --procs="$E2E_PROCS" --fail-on-empty \
+          --focus='NemoGuardrails' --junit-report=junit-e2e-guardrails-report.xml \
+          --output-dir="$(workspaces.shared-workspace.path)" ./tests/e2e || GINKGO_RC=$?
+
+        REPORT="$(workspaces.shared-workspace.path)/junit-e2e-guardrails-report.xml"
+        # Clean up Ginkgo JUnit XML for ReportPortal:
+        #  - Keep guardrails tests and suite setup/teardown failures, including skipped guardrails tests
+        #  - Remove <properties> block (Ginkgo metadata that causes RP to silently fail suite creation)
+        #  - Rename testsuite/classname so tests appear grouped under 'e2e-guardrails' in RP
+        #  - Recalculate counts after removing testcases
+        if [ -f "$REPORT" ]; then
+          python3.11 - "$REPORT" <<'PY'
+        import sys
+        import xml.etree.ElementTree as ET
+
+        tree = ET.parse(sys.argv[1])
+        root = tree.getroot()
+        for suite in root.findall("testsuite"):
+            for testcase in suite.findall("testcase"):
+                if "NemoGuardrails" not in testcase.get("name", "") and testcase.find("failure") is None and testcase.find("error") is None:
+                    suite.remove(testcase)
+                else:
+                    testcase.set("classname", "tests.e2e.guardrails")
+            for properties in suite.findall("properties"):
+                suite.remove(properties)
+            suite.set("name", "e2e-guardrails")
+            skipped = suite.findall("testcase/skipped")
+            pending = sum(item.get("message") == "pending" for item in skipped)
+            suite.set("tests", str(len(suite.findall("testcase"))))
+            suite.set("failures", str(len(suite.findall("testcase/failure"))))
+            suite.set("errors", str(len(suite.findall("testcase/error"))))
+            suite.set("disabled", str(pending))
+            suite.set("skipped", str(len(skipped) - pending))
+
+        for attribute in ("tests", "failures", "errors"):
+            root.set(attribute, str(sum(int(suite.get(attribute)) for suite in root.findall("testsuite"))))
+        # Ginkgo's root disabled count includes both pending and skipped tests.
+        root.set("disabled", str(len(root.findall("testsuite/testcase/skipped"))))
+        tree.write(sys.argv[1], encoding="utf-8", xml_declaration=True)
+        PY
+        fi
+        exit "$GINKGO_RC"
+
+  workspaces:
+    - name: shared-workspace
